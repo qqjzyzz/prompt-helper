@@ -1,0 +1,536 @@
+import openai
+import streamlit as st
+import mysql.connector
+from PIL import Image
+from datetime import datetime
+from aliyunsdkcore.client import AcsClient
+from aliyunsdkcore.request import CommonRequest
+import json
+import random
+import re
+import os
+import mysql.connector
+from mysql.connector import Error
+
+# 加载环境变量
+openai.api_base = ""
+openai.api_key = ""
+
+# 阿里云短信服务配置
+ACCESS_KEY_ID = ""
+ACCESS_KEY_SECRET = ""
+SIGN_NAME = ""
+TEMPLATE_CODE = ""
+
+# 初始化AcsClient
+client = AcsClient(ACCESS_KEY_ID, ACCESS_KEY_SECRET, 'cn-hangzhou')
+
+
+def send_sms(phone_number, code):
+    request = CommonRequest()
+    request.set_accept_format('json')
+    request.set_domain('dysmsapi.aliyuncs.com')
+    request.set_method('POST')
+    request.set_protocol_type('https')
+    request.set_version('2017-05-25')
+    request.set_action_name('SendSms')
+
+    request.add_query_param('PhoneNumbers', phone_number)
+    request.add_query_param('SignName', SIGN_NAME)
+    request.add_query_param('TemplateCode', TEMPLATE_CODE)
+    request.add_query_param('TemplateParam', json.dumps({'code': code}))
+
+    try:
+        response = client.do_action_with_exception(request)
+        return json.loads(response)
+    except Exception as e:
+        st.error(f"发送短信时发生错误: {e}")
+        return None
+
+
+# 各个框架生成提示词的函数
+def generate_prompt_co_star(user_input):
+    # 将固定的背景信息、角色设定或指南放入 content 中
+    content = """你是一个提示词优化助手，请你将用户输入转化为 'co-star' 框架提示词。请根据每个元素提供尽可能详细的信息，确保每个元素都清晰、具体，并且符合以下格式：
+
+==上下文==
+提供一个具体的背景描述，包含任务目标和平台特征，明确内容需要适应的场景和用户需求。
+
+==目标==
+指出最终希望实现的具体目标，并分解成几项具体的子任务。
+
+==身份==
+说明内容创作者的角色及其对内容的影响，确保风格和语气与平台用户习惯一致。
+
+==语气==
+说明语气如何调整，以适应目标受众，突出内容的互动性和吸引力。
+
+==受众==
+明确主要目标受众及其特征，确保内容风格和语调符合他们的期望和偏好。
+
+==结果==
+说明预期的最终结果，确保生成的内容有明确的目的，符合平台发布要求。
+
+请按照上述格式输出，不允许缺少任何元素或增加额外内容。
+"""
+
+    # 用户的具体输入作为单独的消息
+    prompt = f'用户输入: "{user_input}"'
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": content},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    output = response.choices[0].message["content"]
+    return output
+
+
+def generate_prompt_crispe(user_input):
+    content = """你是一个生成 CRISPE 框架提示词的助手。请将用户输入转化为符合 CRISPE 框架的提示词，CRISPE 框架包括以下几个部分：
+
+Capacity and Role（角色）：赋予ChatGPT角色扮演的能力，也就是在当前提问中你希望ChatGPT以何种身份帮你解答这个问题。例如，你在想ChatGPT询问感冒药的使用时，更应该让ChatGPT扮演一位医生，而不是一位修理工。
+
+Insight（洞察）：提供背景信息和充分的上下文。当我们给ChatGPT提问时，充足的上下文和背景知识可以让ChatGPT更好地了解你想询问的问题。
+
+Statement（声明）：这部分主要提供你的诉求或者问题，明确告诉ChatGPT，你希望得到什么样的答案或者解释。
+
+Personality（个性）：这部分主要是提供你希望ChatGPT以何种方式进行输出答案，比如用JSON结构输出，或者用轻松幽默的语言进行回答。
+
+Experime（实验）：如果这是一个宽泛性的问题，你可以让ChatGPT提供多个答案或者建议，以供我们选择。
+
+请确保按上述结构润色用户的输入，并严格按照该格式输出，不允许缺少任何元素或添加额外内容。
+"""
+
+    # 用户的具体输入作为单独的消息
+    prompt = f'用户输入: "{user_input}"'
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": content},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    output = response.choices[0].message["content"]
+    return output
+
+
+def generate_prompt_icio(user_input):
+    # 将 ICIO 框架的普适性信息放入 content 中
+    content = """你是一个生成 ICIO 框架提示词的助手。请将用户输入转化为符合 ICIO 框架的提示词，只允许输出提示词，其他内容严禁输出，ICIO 框架包括以下几个部分：
+
+1. **Input（输入）**：明确用户提供给 AI 的输入数据或信息。详细描述所需处理的具体数据类型或内容（如数据集、文本段落、图像文件等）。确保输入信息足够具体和清晰，以便 AI 能够准确地理解并处理这些数据。
+
+2. **Context（上下文）**：提供任务的背景和目的，详细描述 AI 需要完成的任务类型及其应用场景（如数据清洗、文本翻译、图像转换、内容创作、技术任务等）。包括任务的具体目标和用户需求，以帮助 AI 明确其在此任务中的角色和期望结果。
+
+3. **Instruction（指令）**：给出对 AI 的明确操作指令，详细描述用户希望 AI 执行的操作或任务（如生成特定格式的报告、撰写特定风格的文章、设计特定样式的图像等）。指令需要具体到每个步骤，以便 AI 能够准确理解并执行任务。
+
+4. **Output（输出）**：指定预期的输出格式和标准，详细说明输出应符合哪些具体要求或格式（如 CSV 文件、JSON 格式、Markdown 文本，或者带有特定标签的 HTML）。确保输出标准清晰，以使生成结果完全符合用户的预期。
+
+请确保按上述结构润色用户的输入，并严格按照该格式输出，不允许缺少任何元素或添加额外内容。注意输出格式。
+"""
+    # 用户的具体输入作为单独的消息
+    prompt = f'用户输入: "{user_input}"'
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": content},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    output = response.choices[0].message["content"]
+    return output
+
+
+def generate_prompt_broke(user_input):
+    content = f"""请将"{user_input}"直接转化为严格以BROKE框架润色后的提示词，直接输出润色后的提示词，中文输出，不允许输出其他无关的内容。注意输出格式美观。
+
+    **Background**: 说明背景，提供充足信息
+    **Role**: 用户要 AI 扮演的角色是什么
+    **Objectives**: 用户要 AI 做的事情的一个描述
+    **Key Result**: 对于 AI 输出的回答，在风格、格式、内容等方面的要求
+    **Evolve**: 在 AI 给出回答以后，三种调整、改进方法
+    """
+    prompt = f'用户输入: "{user_input}"'
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": content},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    output = response.choices[0].message["content"]
+    return output
+
+
+def generate_prompt_midjourney(user_input):
+    content = f"""将用户输入的画面描述拆解为镜头、光线、主体、背景、风格和氛围六个要素，进行补充和完善，生成高质量的绘画提示词。注意格式，输出正常句子即可"""
+    prompt = f'用户输入："{user_input}"'
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": content},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    output = response.choices[0].message["content"]
+    return output
+
+
+def modify_output(modified_input, original_output, framework):
+    modified_prompt = f"原始提示词是：\n{original_output}\n\n用户的修改意见是：{modified_input}\n\n请根据用户的意见重新生成修改后的 {framework} 框架提示词。请注意，最后只输出修改后的提示词。"
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": f"你是 {framework} 框架的专家。"},
+            {"role": "user", "content": modified_prompt}
+        ]
+    )
+    return response.choices[0].message["content"]
+
+
+# 定义框架及其介绍
+framework_descriptions = {
+    "CO-STAR": "适用于背景丰富、需要多维度定制输出的场景，如专业报告、市场分析。",
+    "CRISPE": "适用于角色扮演和模拟的场景，如个性化互动、情境模拟。",
+    "ICIO": "适用于明确任务指令和格式的场景，如数据处理、内容创作、技术任务。",
+    "BROKE": "适用于项目管理和持续改进的场景，如创意设计、研究分析。",
+    "Midjourney": "生成高质量的绘画提示词，将用户输入的画面描述拆解为镜头、光线、主体、背景、风格和氛围六个要素，进行补充和完善。"
+}
+
+
+def calculate_height(text):
+    """
+    计算文本框的高度
+    :param text: 文本内容
+    :return: 文本框的高度（以像素为单位）
+    """
+    # 假设每行大约20个字符，每行高度为30像素
+    num_lines = len(text) // 20 + text.count('\n') + 1
+    return max(100, min(30 * num_lines, 500))  # 最小100像素，最大500像素
+
+
+# 主程序逻辑
+# 获取用户当天的使用次数
+def get_user_usage_count(phone_number):
+    conn = get_db_connection()
+    if conn is None:
+        return 0
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT id FROM users WHERE phone_number = %s', (phone_number,))
+        user = cursor.fetchone()
+        if not user:
+            return 0  # 用户不存在
+
+        user_id = user[0]
+        today = datetime.now().date()
+
+        cursor.execute('''
+        SELECT usage_count FROM usage_log 
+        WHERE user_id = %s AND usage_date = %s
+        ''', (user_id, today))
+
+        usage_record = cursor.fetchone()
+        usage_count = usage_record[0] if usage_record else 0
+        return usage_count
+    except mysql.connector.Error as err:
+        st.error(f"获取使用次数时发生错误: {err}")
+        return 0
+    finally:
+        cursor.close()
+        conn.close()
+
+# 更新用户使用次数
+def update_user_usage(phone_number):
+    conn = get_db_connection()
+    if conn is None:
+        return
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT id FROM users WHERE phone_number = %s', (phone_number,))
+        user = cursor.fetchone()
+        if not user:
+            return  # 用户不存在
+
+        user_id = user[0]
+        today = datetime.now().date()
+
+        cursor.execute('''
+        SELECT id, usage_count FROM usage_log 
+        WHERE user_id = %s AND usage_date = %s
+        ''', (user_id, today))
+
+        usage_record = cursor.fetchone()
+
+        if usage_record:
+            usage_id, usage_count = usage_record
+            cursor.execute('''
+            UPDATE usage_log SET usage_count = %s WHERE id = %s
+            ''', (usage_count + 1, usage_id))
+        else:
+            cursor.execute('''
+            INSERT INTO usage_log (user_id, usage_date, usage_count) 
+            VALUES (%s, %s, %s)
+            ''', (user_id, today, 1))
+
+        conn.commit()
+    except mysql.connector.Error as err:
+        st.error(f"更新使用次数时发生错误: {err}")
+    finally:
+        cursor.close()
+        conn.close()
+
+# 主程序逻辑
+def main():
+    # 侧边栏：登录/注册功能
+    with st.sidebar:
+        if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
+            st.subheader("用户登录/注册")
+            phone_number = st.text_input("手机号")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                verification_code_input = st.text_input("验证码")
+            with col2:
+                if st.button("获取验证码"):
+                    if re.match(r'^1[3-9]\d{9}$', phone_number):
+                        verification_code = str(random.randint(100000, 999999))
+                        response = send_sms(phone_number, verification_code)
+                        if response and response.get('Code') == 'OK':
+                            st.session_state['verification_code'] = verification_code
+                            st.success("验证码已发送")
+                        else:
+                            st.error("发送失败，请重试")
+                    else:
+                        st.error("无效的手机号")
+
+            if st.button("登录/注册"):
+                if 'verification_code' in st.session_state and verification_code_input == st.session_state['verification_code']:
+                    if register_or_login_user(phone_number):
+                        st.session_state['logged_in'] = True
+                        st.session_state['phone_number'] = phone_number
+                        st.success("登录成功")
+                        st.rerun()
+                else:
+                    st.error("验证码错误")
+        else:
+            st.success(f"当前用户: {st.session_state['phone_number']}")
+            if st.button("退出登录"):
+                st.session_state['logged_in'] = False
+                st.rerun()
+
+    # 显示主页面功能
+    st.title("多框架提示词助手")
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    # 使用 st.session_state 来保存框架选择
+    if 'framework' not in st.session_state:
+        st.session_state['framework'] = None
+
+    # 每个按钮对应一个框架选项
+    with col1:
+        if st.button("CO-STAR"):
+            st.session_state['framework'] = "CO-STAR"
+    with col2:
+        if st.button("CRISPE"):
+            st.session_state['framework'] = "CRISPE"
+    with col3:
+        if st.button("ICIO"):
+            st.session_state['framework'] = "ICIO"
+    with col4:
+        if st.button("BROKE"):
+            st.session_state['framework'] = "BROKE"
+    with col5:
+        if st.button("Midjourney"):
+            st.session_state['framework'] = "Midjourney"
+
+    # 显示已选择的框架
+    if st.session_state['framework']:
+        selected_framework = st.session_state['framework']
+        st.write(f"你选择了: {selected_framework}")
+        st.write(framework_descriptions[selected_framework])  # 显示框架介绍
+
+    user_input = st.text_input("请输入您的任务", placeholder="例如：写一篇宣传AI的小红书")
+
+    # 未登录用户功能禁用
+    if 'logged_in' in st.session_state and st.session_state['logged_in']:
+        phone_number = st.session_state['phone_number']
+        usage_count = get_user_usage_count(phone_number)
+
+        if usage_count >= 2:
+            st.warning("您今天的使用次数已达上限，每天最多可使用两次。")
+            st.button("生成提示词", disabled=True)  # 禁用生成提示词按钮
+        else:
+            # 生成提示词按钮
+            if st.button("生成提示词"):
+                if user_input and st.session_state['framework']:
+                    framework = st.session_state['framework']
+                    if framework == "CO-STAR":
+                        output = generate_prompt_co_star(user_input)
+                    elif framework == "CRISPE":
+                        output = generate_prompt_crispe(user_input)
+                    elif framework == "ICIO":
+                        output = generate_prompt_icio(user_input)
+                    elif framework == "BROKE":
+                        output = generate_prompt_broke(user_input)
+                    elif framework == "Midjourney":
+                        output = generate_prompt_midjourney(user_input)
+                    else:
+                        output = "未选择框架或框架不正确"
+
+                    # 更新用户操作次数
+                    update_user_usage(phone_number)
+                    st.session_state['initial_output'] = output
+
+                    # 重新获取使用次数并显示
+                    usage_count = get_user_usage_count(phone_number)
+                    st.info(f"今日已使用 {usage_count} 次，还可使用 {2 - usage_count} 次")
+                else:
+                    st.warning("请输入任务描述并选择框架")
+
+        # 显示初始提示词
+        if 'initial_output' in st.session_state:
+            st.write(f"初始 {st.session_state['framework']} 提示词:")
+            st.text_area("初始提示词", value=st.session_state['initial_output'],
+                         height=calculate_height(st.session_state['initial_output']), key="initial_text")
+
+        # 修改建议输入框和修改后的输出框
+        if 'initial_output' in st.session_state:
+            modification_input = st.text_input("提出需要修改的点", placeholder="例如：请更加注重营销角度")
+
+            # 修改按钮
+            if st.button("修改提示词"):
+                if modification_input:
+                    modified_output = modify_output(modification_input, st.session_state['initial_output'],
+                                                    st.session_state['framework'])
+                    st.session_state['modified_output'] = modified_output
+
+                # 显示修改后的提示词
+                if 'modified_output' in st.session_state:
+                    st.write(f"修改后的 {st.session_state['framework']} 提示词:")
+                    st.text_area("修改后的提示词", value=st.session_state['modified_output'],
+                                 height=calculate_height(st.session_state['modified_output']), key="modified_text")
+
+    else:
+        # 禁用未登录用户的功能按钮
+        st.info("请先登录以使用功能。")
+        st.button("生成提示词", disabled=True)
+        st.text_input("提出需要修改的点", disabled=True)
+
+# 初始化数据库
+
+
+# 创建数据库连接
+def get_db_connection():
+    try:
+        conn = mysql.connector.connect(
+            host='localhost',
+            user='yuan',
+            password='mima',
+            database='database'
+        )
+        return conn
+    except Error as e:
+        st.error(f"数据库连接错误: {e}")
+        return None
+
+
+# 初始化数据库和用户表格
+def init_db():
+    conn = get_db_connection()
+    if conn is None:
+        return
+
+    cursor = conn.cursor()
+
+    try:
+        # 删除旧的 users 表（如果存在）
+        cursor.execute("DROP TABLE IF EXISTS usage_log")
+        cursor.execute("DROP TABLE IF EXISTS users")
+
+        # 创建新的 users 表
+        cursor.execute('''
+        CREATE TABLE users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            phone_number VARCHAR(255) UNIQUE NOT NULL
+        )
+        ''')
+
+        # 创建新的 usage_log 表
+        cursor.execute('''
+        CREATE TABLE usage_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            usage_date DATE NOT NULL,
+            usage_count INT DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        ''')
+
+        conn.commit()
+        print("数据库初始化成功")
+    except mysql.connector.Error as err:
+        print(f"数据库初始化错误: {err}")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+
+
+
+def register_or_login_user(phone_number):
+    conn = get_db_connection()
+    if conn is None:
+        return False
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT id FROM users WHERE phone_number = %s', (phone_number,))
+        user = cursor.fetchone()
+        if not user:
+            cursor.execute('INSERT INTO users (phone_number) VALUES (%s)', (phone_number,))
+            conn.commit()
+        return True
+    except mysql.connector.Error as err:
+        st.error(f"发生错误: {err}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+st.sidebar.markdown("---")
+image = Image.open("/root/3.png")
+st.sidebar.image(image, caption="如果我的工具帮到了你，欢迎打赏，用于网站持续运营", use_column_width=True)
+
+# GitHub 仓库 URL
+github_url = "https://github.com/qqjzyzz?tab=projects"
+
+# GitHub 图标 URL
+github_logo_url = "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+
+# 使用 HTML 创建 GitHub 图标的链接
+st.markdown(
+    f'<a href="{github_url}" target="_blank"><img src="{github_logo_url}" width="40"></a>',
+    unsafe_allow_html=True
+)
+
+# 初始化数据库
+init_db()
+
+# 运行主程序
+if __name__ == "__main__":
+    main()
+
