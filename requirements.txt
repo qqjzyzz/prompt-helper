@@ -1,4 +1,0 @@
-streamlit
-mysql-connector-python
-Pillow
-openai
