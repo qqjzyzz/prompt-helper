@@ -3,7 +3,7 @@
 
 streamlit框架
 
-all-code那个代码是最新版的所有代码，你一顿pip install 后就可以使用了。
+一顿pip install后就可以使用了。
 
 想法是给他搞成可上线的成熟项目。
 
